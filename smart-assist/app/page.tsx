@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, ChangeEvent } from "react";
+import { useState } from "react";
 
 /* =======================
    Types
@@ -12,175 +12,206 @@ type UXIssue = {
   suggestion: string;
 };
 
-type AIResponse = {
-  issues: UXIssue[];
-  summary: string;
+/* =======================
+   Helper: Image Analysis (Browser)
+======================= */
+const extractVisualStats = (file: File): Promise<{
+  brightness: number;
+  variance: number;
+}> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d")!;
+
+    img.onload = () => {
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+
+      const imageData = ctx.getImageData(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      ).data;
+
+      let sum = 0;
+      for (let i = 0; i < imageData.length; i += 4) {
+        sum +=
+          (imageData[i] +
+            imageData[i + 1] +
+            imageData[i + 2]) /
+          3;
+      }
+
+      const avgBrightness = sum / (imageData.length / 4);
+
+      let varianceSum = 0;
+      for (let i = 0; i < imageData.length; i += 4) {
+        const b =
+          (imageData[i] +
+            imageData[i + 1] +
+            imageData[i + 2]) /
+          3;
+        varianceSum += Math.pow(b - avgBrightness, 2);
+      }
+
+      resolve({
+        brightness: avgBrightness,
+        variance: varianceSum / (imageData.length / 4),
+      });
+    };
+
+    img.src = URL.createObjectURL(file);
+  });
 };
 
 /* =======================
    Component
 ======================= */
 export default function Home() {
-  /* ---------- State ---------- */
   const [image, setImage] = useState<File | null>(null);
+  const [mode, setMode] = useState<"visual" | "ai">("visual");
   const [issues, setIssues] = useState<UXIssue[]>([]);
-  const [loading, setLoading] = useState(false);
   const [summary, setSummary] = useState("");
-  const [techStack, setTechStack] = useState("React");
+  const [loading, setLoading] = useState(false);
 
-  /* ---------- Handlers ---------- */
-  const handleImageChange = (e: ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setImage(e.target.files[0]);
-      setIssues([]);
-      setSummary("");
-    }
-  };
-
-  const analyzeUX = async () => {
-    if (!image) {
-      alert("Please upload a UI screenshot first.");
-      return;
-    }
+  /* =======================
+     Analyze Handler
+  ======================= */
+  const analyze = async () => {
+    if (!image) return;
 
     setLoading(true);
     setIssues([]);
     setSummary("");
 
-    const formData = new FormData();
-    formData.append("image", image);
-    formData.append("techStack", techStack);
+    // 1️⃣ Extract real visual stats in browser
+    const visualStats = await extractVisualStats(image);
 
-    try {
-      const res = await fetch("/api/analyze-ui", {
-        method: "POST",
-        body: formData,
-      });
+    // 2️⃣ Call backend (JSON, NOT FormData)
+    const res = await fetch("/api/analyze-ui", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode,
+        techStack: "React",
+        visualStats,
+      }),
+    });
 
-      const data: AIResponse = await res.json();
+    const data = await res.json();
 
-      setIssues(data.issues);
-      setSummary(data.summary);
-    } catch (err) {
-      alert("AI analysis failed. Please try again.");
-    } finally {
-      setLoading(false);
-    }
+    setIssues(data.issues || []);
+    setSummary(data.summary || "");
+    setLoading(false);
   };
 
-  /* ---------- UI ---------- */
+  /* =======================
+     UI
+  ======================= */
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gray-100 px-4">
-      <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md">
-
-        {/* Header */}
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold">Smart Assist</h1>
-          <p className="text-sm text-gray-600">
-            Get quick, actionable UX feedback from a UI screenshot using AI.
-          </p>
-          <p className="text-xs text-gray-500 mt-1">
-            Supported formats: PNG, JPG. Best results with full-screen UI captures.
-          </p>
-        </div>
+    <main className="min-h-screen bg-gray-100 flex items-center justify-center p-6">
+      <div className="bg-white p-6 rounded-xl shadow-lg w-full max-w-md">
+        <h1 className="text-2xl font-bold mb-2">Smart Assist</h1>
+        <p className="text-sm text-gray-600 mb-4">
+          Upload a UI screenshot and get instant UX feedback.
+        </p>
 
         {/* Upload */}
         <input
           type="file"
           accept="image/*"
-          onChange={handleImageChange}
-          className="mb-3 w-full text-sm"
+          onChange={(e) =>
+            setImage(e.target.files?.[0] || null)
+          }
+          className="mb-4"
         />
-
-        {/* Tech stack selector */}
-        <div className="mb-4">
-          <label className="text-sm font-medium text-gray-700">
-            Optimize suggestions for:
-          </label>
-          <select
-            value={techStack}
-            onChange={(e) => setTechStack(e.target.value)}
-            className="mt-1 w-full border rounded-md p-2 text-sm"
-          >
-            <option>React</option>
-            <option>Angular</option>
-            <option>Vue</option>
-            <option>Flutter</option>
-            <option>HTML/CSS</option>
-          </select>
-        </div>
 
         {/* Preview */}
         {image && (
           <img
             src={URL.createObjectURL(image)}
-            alt="UI Preview"
-            className="mb-4 rounded-lg border"
+            alt="Preview"
+            className="mb-4 rounded border"
           />
         )}
 
+        {/* Mode */}
+        <select
+          value={mode}
+          onChange={(e) =>
+            setMode(e.target.value as "visual" | "ai")
+          }
+          className="mb-3 w-full border p-2 rounded"
+        >
+          <option value="visual">
+            Visual Heuristic Analysis
+          </option>
+          <option value="ai">
+            AI UX Review (Phi-3)
+          </option>
+        </select>
+
+        <p className="text-xs text-gray-500 mb-4">
+          {mode === "visual"
+            ? "Explainable UX insights based on visual properties."
+            : "Generative AI feedback using a local LLM."}
+        </p>
+
         {/* Action */}
         <button
-          onClick={analyzeUX}
-          disabled={loading}
-          className={`w-full py-2 rounded-lg text-white transition ${
-            loading
+          onClick={analyze}
+          disabled={loading || !image}
+          className={`w-full py-2 rounded ${
+            loading || !image
               ? "bg-gray-400 cursor-not-allowed"
-              : "bg-black hover:bg-gray-800"
+              : "bg-black text-white"
           }`}
         >
-          {loading ? "Analyzing interface…" : "Analyze UX"}
+          {loading ? "Analyzing…" : "Analyze UX"}
         </button>
-
-        {/* Feedback */}
-        {issues.length > 0 && (
-          <div className="mt-6 space-y-4">
-            <h2 className="text-lg font-semibold">UX Feedback</h2>
-
-            {issues.map((issue, index) => (
-              <div
-                key={index}
-                className="border rounded-lg p-4 bg-gray-50 hover:shadow-sm transition"
-              >
-                <div className="flex justify-between items-center mb-1">
-                  <h3 className="font-medium">{issue.title}</h3>
-                  <span
-                    className={`text-xs px-2 py-1 rounded ${
-                      issue.severity === "High"
-                        ? "bg-red-100 text-red-700"
-                        : issue.severity === "Medium"
-                        ? "bg-yellow-100 text-yellow-700"
-                        : "bg-green-100 text-green-700"
-                    }`}
-                  >
-                    {issue.severity}
-                  </span>
-                </div>
-
-                <p className="text-sm text-gray-600 mb-2">
-                  {issue.description}
-                </p>
-
-                <p className="text-sm">
-                  <strong>Suggestion:</strong> {issue.suggestion}
-                </p>
-              </div>
-            ))}
-          </div>
-        )}
 
         {/* Summary */}
         {summary && (
-          <div className="mt-6 border rounded-lg p-4 bg-blue-50">
-            <h2 className="text-lg font-semibold mb-2">
-              UX Expert Insight
+          <div className="mt-6">
+            <h2 className="font-semibold mb-1">
+              Summary
             </h2>
-            <p className="text-sm text-gray-700 leading-relaxed">
+            <p className="text-sm text-gray-700">
               {summary}
             </p>
           </div>
         )}
 
+        {/* Issues */}
+        {issues.length > 0 && (
+          <div className="mt-4 space-y-3">
+            {issues.map((issue, i) => (
+              <div
+                key={i}
+                className="border p-3 rounded bg-gray-50"
+              >
+                <div className="flex justify-between mb-1">
+                  <h3 className="font-medium">
+                    {issue.title}
+                  </h3>
+                  <span className="text-xs">
+                    {issue.severity}
+                  </span>
+                </div>
+                <p className="text-sm text-gray-600">
+                  {issue.description}
+                </p>
+                <p className="text-sm mt-1">
+                  <strong>Suggestion:</strong>{" "}
+                  {issue.suggestion}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </main>
   );
